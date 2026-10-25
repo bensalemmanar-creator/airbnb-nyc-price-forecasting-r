@@ -1,0 +1,10 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+.DS_Store
+# raw data is downloaded from Kaggle, not stored here
+AB_NYC_2019.csv
+# knit output
+airbnb_Manar.html
+*_files/

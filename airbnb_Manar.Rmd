@@ -1,0 +1,302 @@
+---
+title: "Airbnb NYC Price Forecasting"
+author: "Manar Ben Salem"
+output: html_document
+date: "2026-04-29"
+---
+
+```{r setup, include=FALSE}
+library(TSA)
+library(astsa)
+library(tseries)
+library(TSstudio)
+library(tidyverse)
+library(dplyr)
+library(ggpubr)
+library(forecast)
+library(fpp2)
+library(ggplot2)
+library(ggfortify)
+library(patchwork)
+library(prophet)
+library(zoo)
+```
+
+---
+
+# 1. Data Collection & Exploration
+
+```{r}
+content = read.csv("AB_NYC_2019.csv")
+head(content)
+str(content)
+summary(content)
+cat("Rows before cleaning:", nrow(content))
+
+```
+
+
+# 2. Data Cleaning
+
+## 2.1 Check for Missing Values
+
+```{r}
+colSums(is.na(content))
+content = content[!is.na(content$last_review), ]
+cat("Rows after removing missing last_review:", nrow(content))
+
+```
+
+## 2.2 Check for Outliers in Price
+
+```{r}
+summary(content$price)
+boxplot(content$price, main = "Raw Listing Price", ylab = "Price (USD)")
+```
+
+The boxplot reveals extreme outliers, the maximum is $10,000/night.
+We also have listings with a price of $0, which are invalid entries.
+
+```{r}
+content = content[content$price > 0 & content$price <= 1000, ]
+summary(content$price)
+cat("Rows after price cleaning:", nrow(content), "\n")
+boxplot(content$price, main = "Listing Price After Cleaning", ylab = "Price (USD)")
+```
+
+---
+
+## 2.3 Build the Monthly Time Series
+
+```{r}
+content$last_review = as.Date(content$last_review)
+content$year_month  = as.Date(format(content$last_review, "%Y-%m-01"))
+
+monthly = content %>%
+  group_by(year_month) %>%
+  summarise(median_price = median(price), n = n()) %>%
+  filter(n >= 10,
+         year_month >= as.Date("2015-01-01"),
+         year_month <= as.Date("2019-06-01")) %>%
+  arrange(year_month)
+
+monthly
+```
+
+```{r}
+ts_data = ts(monthly$median_price, start = c(2015, 1), frequency = 12)
+ts_data
+autoplot(ts_data) +
+  ggtitle("Monthly Median Airbnb Price - NYC (After Cleaning)") +
+  xlab("Year") + ylab("Median Price (USD)")
+```
+
+---
+
+## 2.4 Check for Outliers in the Monthly Time Series
+
+```{r}
+boxplot(ts_data, main = "Monthly Median Price - Boxplot", ylab = "Price (USD)")
+
+ts_clean = tsclean(ts_data)
+ts_clean
+
+ts_data = ts_clean
+autoplot(ts_data) +
+  ggtitle("Final Cleaned Time Series") +
+  xlab("Year") + ylab("Median Price (USD)")
+```
+---
+
+# 4. Preprocessing & Stationarity Check
+
+```{r}
+adf.test(ts_data)
+kpss.test(ts_data)
+
+acf(ts_data,  main = "ACF - Original")
+pacf(ts_data, main = "PACF - Original")
+```
+
+```{r}
+log_ts = log(ts_data)
+autoplot(log_ts) + ggtitle("Log-transformed Series") + ylab("log(Price)")
+
+ts_diff = diff(log_ts)
+autoplot(ts_diff) + ggtitle("Differenced Log Series")
+
+adf.test(ts_diff)
+kpss.test(ts_diff)
+```
+
+```{r}
+acf(ts_diff,  main = "ACF - Differenced")
+pacf(ts_diff, main = "PACF - Differenced")
+```
+
+```{r}
+# Train / Validate / Test split
+train = window(ts_data, end   = c(2017, 12))
+val   = window(ts_data, start = c(2018,  1), end = c(2018, 6))
+test  = window(ts_data, start = c(2018,  7))
+
+train
+val
+test
+```
+
+---
+
+# 5. Model Implementation
+
+## ARIMA Model
+
+```{r}
+arima_model = auto.arima(log(train), seasonal = FALSE)
+arima_model
+summary(arima_model)
+checkresiduals(arima_model)
+```
+
+```{r}
+forecast_arima = forecast(arima_model, h = length(val) + length(test))
+autoplot(forecast_arima) + ggtitle("ARIMA Forecast")
+
+arima_pred = exp(forecast_arima$mean)
+arima_pred
+```
+
+---
+
+## SARIMA Model
+
+```{r}
+sarima_model = auto.arima(log(train), seasonal = TRUE, D = 1)
+summary(sarima_model)
+checkresiduals(sarima_model)
+```
+
+```{r}
+forecast_sarima = forecast(sarima_model, h = length(val) + length(test))
+autoplot(forecast_sarima) + ggtitle("SARIMA Forecast")
+
+sarima_pred = exp(forecast_sarima$mean)
+sarima_pred
+```
+
+---
+
+## ETS Model
+
+```{r}
+ets_model = ets(train)
+summary(ets_model)
+checkresiduals(ets_model)
+```
+
+```{r}
+forecast_ets = forecast(ets_model, h = length(val) + length(test))
+autoplot(forecast_ets) + ggtitle("ETS Forecast")
+forecast_ets
+```
+
+---
+
+## Prophet Model
+
+```{r}
+df = data.frame(
+  ds = monthly$year_month,
+  y  = log(monthly$median_price)
+)
+
+train_df = df[1:(nrow(monthly) - length(test)), ]
+
+model_prophet = prophet(train_df, yearly.seasonality = TRUE)
+
+future           = make_future_dataframe(model_prophet, periods = length(test), freq = "month")
+forecast_prophet = predict(model_prophet, future)
+tail(forecast_prophet[c("ds", "yhat", "yhat_lower", "yhat_upper")])
+
+plot(model_prophet, forecast_prophet)
+prophet_plot_components(model_prophet, forecast_prophet)
+```
+
+---
+
+# 6. Model Evaluation & Comparison
+
+```{r}
+h_total = length(val) + length(test)
+n_val   = length(val)
+n_test  = length(test)
+
+actual_test = as.numeric(test)
+
+arima_test  = as.numeric(arima_pred)[(n_val + 1):h_total]
+sarima_test = as.numeric(sarima_pred)[(n_val + 1):h_total]
+ets_test    = as.numeric(forecast_ets$mean)[(n_val + 1):h_total]
+prophet_test = exp(tail(forecast_prophet$yhat, n_test))
+```
+
+```{r}
+data.frame(
+  Model = c("ARIMA", "SARIMA", "ETS"),
+  AIC   = c(AIC(arima_model), AIC(sarima_model), AIC(ets_model)),
+  BIC   = c(BIC(arima_model), BIC(sarima_model), BIC(ets_model))
+)
+```
+
+```{r}
+mae  = function(a, p) mean(abs(a - p))
+rmse = function(a, p) sqrt(mean((a - p)^2))
+mape = function(a, p) mean(abs((a - p) / a)) * 100
+
+results = data.frame(
+  Model = c("ARIMA", "SARIMA", "ETS", "Prophet"),
+  RMSE  = c(rmse(actual_test, arima_test),
+            rmse(actual_test, sarima_test),
+            rmse(actual_test, ets_test),
+            rmse(actual_test, prophet_test)),
+  MAE   = c(mae(actual_test, arima_test),
+            mae(actual_test, sarima_test),
+            mae(actual_test, ets_test),
+            mae(actual_test, prophet_test)),
+  MAPE  = c(mape(actual_test, arima_test),
+            mape(actual_test, sarima_test),
+            mape(actual_test, ets_test),
+            mape(actual_test, prophet_test))
+)
+results
+```
+
+```{r}
+test_dates = monthly$year_month[(nrow(monthly) - n_test + 1):nrow(monthly)]
+
+plot(test_dates, actual_test, type = "l", col = "black", lwd = 2,
+     main = "Actual vs Forecasted - Test Period (Jul 2018 - Jun 2019)",
+     xlab = "Date", ylab = "Median Price (USD)",
+     ylim = range(c(actual_test, arima_test, sarima_test, ets_test, prophet_test)))
+
+lines(test_dates, arima_test,   col = "red",    lty = 2, lwd = 1.5)
+lines(test_dates, sarima_test,  col = "blue",   lty = 3, lwd = 1.5)
+lines(test_dates, ets_test,     col = "green",  lty = 4, lwd = 1.5)
+lines(test_dates, prophet_test, col = "orange", lty = 5, lwd = 1.5)
+
+legend("topright",
+       legend = c("Actual", "ARIMA", "SARIMA", "ETS", "Prophet"),
+       col    = c("black", "red", "blue", "green", "orange"),
+       lty    = c(1, 2, 3, 4, 5), lwd = 2)
+```
+
+
+The NYC Airbnb data required three cleaning steps before analysis:
+- Rows with missing last_review dates (10,052) were removed as they could not be placed on a timeline.
+- Listings with price = 0 (invalid) and price > 1000 (extreme outliers) were filtered out.
+- tsclean() was applied to the final monthly series to handle any remaining outliers.
+
+## Which Model Performed Best and Why?
+
+**ETS is the best-performing model for this dataset.**
+
+Based on all three test-set metrics, ETS(M, N, N) is the best-performing model for this dataset. It achieved the lowest RMSE (4.841), the lowest MAE (4.125), and the lowest MAPE (3.97%), meaning its forecasts were on average less than four percent away from the actual monthly median price. Its simplicity just a smoothing parameter and a multiplicative error structure turned out to be a strength rather than a weakness given the relatively small training window of 36 months. With limited data, a parsimonious model that adapts to recent price levels outperforms more complex seasonal models that require many cycles to calibrate.
