@@ -40,7 +40,7 @@ Open `airbnb_Manar.Rmd` in RStudio, install the packages loaded in the first chu
 
 ## Files
 - `airbnb_Manar.Rmd`: full analysis and report
-- `images/`: key slides from the course presentation
+- `Airbnb-Manar-final.pdf`: key slides from the project presentation
 
 ## Author
 Manar Ben Salem. South Mediterranean University, Business Analytics.
