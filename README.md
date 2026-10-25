@@ -26,8 +26,8 @@ Build a monthly price series from NYC Airbnb listings and find which model forec
 | **ETS (M,N,N)** | **4.84** | **4.13** | **3.97%** |
 | Prophet | 8.16 | 7.10 | 6.91% |
 
-![Model comparison](images/model-comparison.png)
-![Stationarity](images/stationarity.png)
+![Model comparison] and ![Stationarity]: 
+[Airbnb-Manar-final.pdf](https://github.com/user-attachments/files/33934851/Airbnb-Manar-final.pdf)
 
 **ETS is the best model**, with forecasts on average within about 4% of the actual monthly median price.
 
